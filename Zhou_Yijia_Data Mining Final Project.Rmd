@@ -1,0 +1,181 @@
+---
+title: "Data Mining Final Project"
+author: "Yijia Zhou"
+date: "December 10, 2015"
+output: html_document
+---
+
+```{r}
+#Use General Social Survey's(2006) data to explore what predicts people's attitudes towards homosexuality#
+d <- read.csv("GSS2006.csv")
+d <- d[,colSums(is.na(d))<nrow(d)]
+#spkhomo, colhomo, libhomo, marhomo, homosex are five variables that measure how well respondents accept homosexuals#
+d$spkhomo <- ifelse(d$spkhomo==1, 1, 0)
+d$colhomo <- ifelse(d$colhomo==4, 1, 0)
+d$libhomo <- ifelse(d$libhomo==2, 1, 0)
+d$rmarhomo <- 6-d$marhomo
+#recode them so all five variables are in the same direction: higher score, higher acceptance to homosexuality#
+hview <- c("spkhomo", "colhomo", "libhomo", "rmarhomo", "homosex")
+hview <- d[, hview]
+summary(hview)
+table(complete.cases(d$spkhomo, d$colhomo, d$libhomo, d$rmarhomo,d$homosex))["TRUE"]
+stopifnot(require(psych))
+#check if these five variables are in fact correlated with each other#
+summary(alpha(hview,check.keys=T))#0.69##okay#
+cor(hview, use = "complete.obs")#okay#
+#create a scaled index on views towards homosexuality#
+d$homoview <- rowMeans(scale(hview))
+hist(d$homoview)
+```
+training vs. testing
+```{r}
+#split data into training and testing#
+nrow(d)
+d <- d[1:4509,]
+d$train <- c(rep(c(TRUE, FALSE), times = nrow(d) %/% 2), TRUE)
+training <- d[d$train, ]
+testing <- d[!d$train, ]
+```
+Exploratory Data Analysis
+```{r}
+#try to identify variables correlated with homoview#
+which(colnames(training)=="homoview")#identify the column number of homoview#
+ncol(training)
+#identify correlated variables: codes edited from answer in #http://stackoverflow.com/questions/21604997/how-to-find-significant-correlations-in-a-large-dataset#
+stopifnot(require(Hmisc))
+correlations <- rcorr(as.matrix(training))
+correlated <- NULL
+for (i in 1:1262) {
+    if (!is.na(correlations$P[i, 1263])) {
+        if (correlations$P[i, 1263] < 0.05) {
+            correlated <- c(correlated, print(paste(rownames(correlations$P)[i])))
+        }
+    }
+}
+#code edited from stackoverflow ended#
+#select some variables as predictors of homoview#
+sub <- d[,c("educ","age","sex","wrkstat","attend","marital","childs","polviews","realinc","bigbang","spkcom","homoview","train")]
+which(colnames(sub)=="train")
+subtrain <- sub[sub$train,]
+subtest <- sub[!sub$train,]
+#religion(attend+bigbang), political views(polviews, spkcom), socioeconomic status(educ, realinc,wrkstat)+demographics(child, marital, sex)#
+
+#deal with missing data#
+stopifnot(require(Amelia))
+#identify which variable has most missing data#
+missmap(subtrain)
+#imputation#
+imputed <- amelia(x = subtrain[,-13], m = 10)
+plot(imputed)
+write.amelia(imputed,file.stem="imputed",extension=NULL,format="csv") 
+imputedt <- read.csv("imputed10")#choose the 10th iteration#
+summary(imputedt)
+
+```
+Multiple Linear Regression
+```{r}
+ols <- lm(homoview ~ educ + age + sex + wrkstat + attend + marital + polviews + realinc + bigbang + spkcom, data = imputedt)
+summary(ols)
+yhat_ols <- predict(ols, newdata = subtest)
+SSE_ols <- mean((subtest$homoview - yhat_ols)^2,na.rm =T)
+SSE_ols
+```
+Step function
+```{r}
+ols_AIC <- step(ols, trace = FALSE)
+setdiff(names(coef(ols)), names(coef(ols_AIC)))
+yhat_AIC <- predict(ols_AIC,data=subtest)
+SSE_AIC <- mean((subtest$homoview-yhat_AIC)^2)
+c(SSE_ols,SSE_AIC)
+```
+lasso
+```{r}
+X <- model.matrix(ols)[,-13]
+y <- imputedt$homoview
+stopifnot(require(lars))
+lasso <- lars(X, y, type = c("lasso")) 
+test_X <- model.matrix(homoview ~ educ + age + sex + wrkstat + attend + marital + polviews + realinc + bigbang + spkcom, data = subtest)[,-13]
+yhat_lasso <- predict(lasso, newx = test_X)$fit
+dim(yhat_lasso)
+SSE_lasso <- colMeans( (subtest$homoview - yhat_lasso) ^ 2 )
+lasso_MSE <- min(SSE_lasso)
+best_lasso <- which.min(SSE_lasso)
+X_best <- cbind(1, X[,coef(lasso)[best_lasso,] != 0])
+sum_ssr <- function(beta) {
+             y_predicted <- X_best %*% beta
+             return(sum((subtrain$homoview - y_predicted) ^2 ))
+}
+#lasso???#
+c(lasso_MSE, SSE_ols, SSE_AIC)
+```
+Principal Component Regression
+```{r}
+stopifnot(require(pls))
+pcr_model <- pcr(homoview ~ educ + age + sex + wrkstat + attend + marital + polviews + realinc + bigbang + spkcom, data = subtrain)
+summary(pcr_model)
+yhat_pcr <- predict(pcr_model, newdata = subtest)
+mean_pcrSE <- colMeans((subtest$homoview - yhat_pcr[,1,]) ^ 2,na.rm=T)
+min(mean_pcrSE)
+which.min(mean_pcrSE)
+SSE_pcr <- min(mean_pcrSE)
+```
+Partial Least Squares Regression
+```{r}
+pls.fit <- plsr(homoview~educ + age + sex + wrkstat + attend + marital +
+                polviews + realinc + bigbang + spkcom, data=subtrain,
+                scale=T,validation="CV")
+summary(pls.fit)
+validationplot(pls.fit,val.type="MSEP")
+pls.pred <- predict(pls.fit,newdata = subtest,ncomp=2)
+SSE_pls <- mean((pls.pred-subtest$homoview)^2)
+```
+gam
+```{r}
+stopifnot(require(gam))
+gam_train <- gam(homoview ~ s(educ) + sex + childs + s(age) + s(wrkstat) +
+                   s(attend) + s(marital) + s(polviews) + s(realinc) +
+                   s(bigbang) + s(spkcom), data = imputedt)
+summary(gam_train)
+# Predicting the gam model in the training data 
+Yhat_gam00 <- predict(gam_train)
+mean( (subtrain$homoview - Yhat_gam00) ^ 2,na.rm=T )
+
+# Predicting the gam model in the testing data 
+Yhat_gam <- predict(gam_train, newdata = subtest)
+SSE_gam <- mean( (subtest$homoview - Yhat_gam) ^ 2,na.rm=T)
+SSE_gam
+
+# Plotting the prediction
+par(mfrow=c(1,2), mar = c(5,4,1,1) + .1, las = 1, pch = 19)
+# In training data
+plot(subtrain$homoview, Yhat_gam00, col="red")
+# In testing data
+plot(subtest$homoview, Yhat_gam, col="blue")
+```
+Polynomial Regression
+```{r}
+poly <- lm(formula = homoview ~ educ + age + sex + wrkstat + attend + I(attend^2) + I(attend^3) + marital + polviews + realinc + I(realinc^2) + I(realinc^3) + bigbang + spkcom, data = imputedt)
+summary(poly)
+yhat_poly <- predict(poly,newdata=subtest)
+SSE_poly <- mean((subtest$homoview-yhat_poly)^2,na.rm=T)
+SSE_poly
+```
+BART
+```{r}
+stopifnot(require(bartMachine))
+set_bart_machine_num_cores(parallel::detectCores())
+barttrain <- na.omit(subtrain)
+out <- bartMachine(barttrain[,1:11], barttrain$homoview, mem_cache_for_speed = FALSE)
+
+BART_pred <- predict(out, new_data = subtest[,1:11])
+SSE_BART <- mean((subtest$homoview - BART_pred) ^ 2,na.rm=T)
+SSE_BART
+```
+select the best model
+```{r}
+c(SSE_ols,SSE_AIC,lasso_MSE, SSE_poly, SSE_pcr, SSE_pls,SSE_gam,SSE_BART)
+#pls performs best#
+best_model <- pls.fit
+#we can use this model to predict how well the respondents accept homosexuality. More importantly, it improves our understanding on what correlates with homosexuality acceptance. In general, people who are younger, more educated, less religious, have better socioeconomic status, believes more in science, and more liberal in political views are more likely to accept homosexuals.#
+```
+
