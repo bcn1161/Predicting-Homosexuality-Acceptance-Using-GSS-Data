@@ -1,6 +1,5 @@
 ---
 title: "Data Mining Final Project"
-author: "Yijia Zhou"
 date: "December 10, 2015"
 output: html_document
 ---
