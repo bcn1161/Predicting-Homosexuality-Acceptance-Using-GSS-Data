@@ -1,5 +1,5 @@
 ---
-title: "Data Mining Final Project"
+title: "Predicting Homosexuality Acceptance"
 date: "December 10, 2015"
 output: html_document
 ---
@@ -170,11 +170,10 @@ BART_pred <- predict(out, new_data = subtest[,1:11])
 SSE_BART <- mean((subtest$homoview - BART_pred) ^ 2,na.rm=T)
 SSE_BART
 ```
-select the best model
+Compare SSE for model selection
 ```{r}
 c(SSE_ols,SSE_AIC,lasso_MSE, SSE_poly, SSE_pcr, SSE_pls,SSE_gam,SSE_BART)
 #pls performs best#
 best_model <- pls.fit
-#we can use this model to predict how well the respondents accept homosexuality. More importantly, it improves our understanding on what correlates with homosexuality acceptance. In general, people who are younger, more educated, less religious, have better socioeconomic status, believes more in science, and more liberal in political views are more likely to accept homosexuals.#
 ```
-
+We can use this model to predict how well the respondents in General Social Survey(2006) accept homosexuality. In essence, it reveals that in general, people who are younger, more educated, less religious, have a higher socioeconomic status, believe more in science, and more liberal in political views are more likely to accept homosexuals.
